@@ -1,0 +1,127 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'org.openjfx.javafxplugin'  version '0.1.0'
+    id 'org.beryx.jlink'           version '3.0.1'
+}
+
+group   = 'com.buildmat'
+version = '1.0.0'
+
+repositories { mavenCentral() }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+javafx {
+    version = "21"
+    modules = ['javafx.controls', 'javafx.fxml', 'javafx.graphics', 'javafx.web']
+}
+
+dependencies {
+    implementation 'com.mysql:mysql-connector-j:8.3.0'
+    implementation 'com.itextpdf:itext7-core:7.2.5'
+    implementation 'ch.qos.logback:logback-classic:1.5.6'
+    implementation 'org.apache.poi:poi-ooxml:5.2.5'
+}
+
+application {
+    mainClass = 'com.buildmat.MainApp'
+    applicationDefaultJvmArgs = [
+        '--add-reads', 'com.buildmat=ALL-UNNAMED'
+    ]
+}
+
+// Allow named module com.buildmat to access unnamed module deps at compile time
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += [
+        '--add-reads', 'com.buildmat=ALL-UNNAMED'
+    ]
+}
+
+// ── Fat JAR — run with Run.bat (external JavaFX SDK) ─────────────────────────
+task fatJar(type: Jar) {
+    archiveClassifier = 'all'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest { attributes 'Main-Class': 'com.buildmat.MainApp' }
+    from {
+        configurations.runtimeClasspath.collect {
+            it.isDirectory() ? it : zipTree(it)
+        }
+    }
+    with jar
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+    exclude 'META-INF/versions/**'
+    // Exclude module-info.class files from iText/POI to avoid module conflicts
+    exclude '**/module-info.class'
+}
+
+// Workaround: beryx jlink plugin expects nonmodjars dir to exist even when empty
+tasks.configureEach { task ->
+    if (task.name == 'createDelegatingModules') {
+        task.doFirst {
+            mkdir "${buildDir}/jlinkbase/nonmodjars"
+        }
+    }
+}
+
+// ── jlink — self-contained image (bundles JVM + JavaFX) ──────────────────────
+// Run:    gradle jlink
+// Output: build/image/
+// To create EXE: run package-exe.bat after this succeeds
+jlink {
+    imageZip = project.file("${buildDir}/distributions/BuildMat-Billing-${version}-win.zip")
+
+    options = ['--strip-debug', '--compress', '2', '--no-header-files', '--no-man-pages']
+
+    launcher {
+        name = 'BuildMat-Billing'
+        jvmArgs = [
+            '--add-opens', 'javafx.graphics/com.sun.javafx.sg.prism=ALL-UNNAMED',
+            '--add-opens', 'javafx.graphics/com.sun.javafx.scene=ALL-UNNAMED',
+            '--add-opens', 'javafx.graphics/com.sun.javafx.scene.text=ALL-UNNAMED',
+            '--add-opens', 'javafx.graphics/com.sun.javafx.css=ALL-UNNAMED',
+            '--add-opens', 'javafx.graphics/com.sun.javafx.tk=ALL-UNNAMED',
+            '--add-opens', 'javafx.graphics/com.sun.glass.ui=ALL-UNNAMED',
+            '--add-opens', 'javafx.base/com.sun.javafx.reflect=ALL-UNNAMED',
+            '--add-opens', 'javafx.base/com.sun.javafx.beans=ALL-UNNAMED',
+            '--add-opens', 'javafx.controls/com.sun.javafx.scene.control=ALL-UNNAMED',
+            '--add-opens', 'javafx.web/com.sun.javafx.webkit=ALL-UNNAMED',
+            '--add-opens', 'javafx.print/javafx.print=ALL-UNNAMED',
+            '--add-opens', 'java.base/java.lang=ALL-UNNAMED',
+            '--add-opens', 'java.base/java.nio=ALL-UNNAMED',
+            '--add-opens', 'java.base/sun.nio.ch=ALL-UNNAMED'
+        ]
+    }
+
+    // forceMerge: explicitly list JARs that have embedded module-info.class
+    // files that would conflict during merging. This strips their module-info
+    // and merges them as unnamed modules instead.
+    forceMerge 'itext', 'poi', 'slf4j', 'logback', 'mysql', 'commons', 'log4j',
+               'xmlbeans', 'SparseBitSet', 'curvesapi', 'ooxml-schemas',
+               'bcpkix', 'bcprov', 'bcutil'
+
+    mergedModule {
+        additive = true
+        uses 'java.sql.Driver'
+    }
+
+    // Extra JDK modules needed by POI and iText at runtime
+    addExtraDependencies 'java.security.sasl', 'java.net.http'
+
+    jpackage {
+        imageName      = 'BuildMat Billing'
+        installerName  = 'BuildMat-Billing-Setup'
+        appVersion     = project.version
+        installerOptions = [
+            '--win-shortcut',
+            '--win-menu',
+            '--win-menu-group', 'BuildMat',
+            '--win-dir-chooser',
+            '--description', 'Billing software for building material suppliers',
+            '--vendor',      'BuildMat Supplies'
+        ]
+    }
+}
